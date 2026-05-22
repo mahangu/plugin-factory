@@ -17,6 +17,7 @@ use CAW\PluginBuilder\Cron\Poller;
 use CAW\PluginBuilder\Gates\HostGatePipeline;
 use CAW\PluginBuilder\Installer;
 use CAW\PluginBuilder\KeyResolver;
+use CAW\PluginBuilder\Support\Logger;
 use CAW\PluginBuilder\Support\Paths;
 
 /**
@@ -278,6 +279,7 @@ final class AdminPage {
 		echo '<p><a href="' . esc_url( $this->menu_url() ) . '">&larr; ' . esc_html__( 'All builds', 'caw-plugin-builder' ) . '</a></p>';
 
 		$this->notices();
+		$this->pending_without_key_hint( $build );
 
 		echo '<div class="caw-card">';
 		echo '<h2>' . esc_html__( 'Request', 'caw-plugin-builder' ) . '</h2>';
@@ -554,6 +556,38 @@ final class AdminPage {
 		$this->key_banner();
 		$this->render_key_card();
 		$this->render_diagnostics();
+		$this->render_log_card();
+		echo '</div>';
+	}
+
+	/**
+	 * Render the collapsible diagnostic log card.
+	 *
+	 * Surfaces Logger::tail() so a failing build can be diagnosed from the
+	 * admin UI. The whole settings page is already manage_options-gated.
+	 */
+	private function render_log_card(): void {
+		$lines = Logger::tail( 200 );
+
+		echo '<div class="caw-card">';
+		echo '<h2>' . esc_html__( 'Diagnostic log', 'caw-plugin-builder' ) . '</h2>';
+
+		if ( [] === $lines ) {
+			echo '<p class="caw-muted">' . esc_html__( 'The log is empty.', 'caw-plugin-builder' ) . '</p>';
+			echo '</div>';
+			return;
+		}
+
+		echo '<details class="caw-file">';
+		echo '<summary>';
+		printf(
+			/* translators: %d: number of log lines */
+			esc_html__( 'Show the last %d log lines', 'caw-plugin-builder' ),
+			count( $lines )
+		);
+		echo '</summary>';
+		echo '<pre class="caw-log">' . esc_html( implode( "\n", $lines ) ) . '</pre>';
+		echo '</details>';
 		echo '</div>';
 	}
 
@@ -812,6 +846,25 @@ final class AdminPage {
 			echo '<li>' . esc_html( $blocker ) . '</li>';
 		}
 		echo '</ul></div>';
+	}
+
+	/**
+	 * Explain why a build is stuck when it is queued but no API key resolves.
+	 *
+	 * @param Build $build Build.
+	 */
+	private function pending_without_key_hint( Build $build ): void {
+		if ( Build::STATUS_PENDING !== $build->status ) {
+			return;
+		}
+		$resolver = new KeyResolver();
+		if ( $resolver->resolve()->is_resolved() ) {
+			return;
+		}
+		echo '<div class="notice notice-warning inline"><p>';
+		echo esc_html__( 'This build is queued but cannot start: no Anthropic API key is configured. It will begin automatically once a key is available.', 'caw-plugin-builder' ) . ' ';
+		echo '<a href="' . esc_url( $resolver->settings_link() ) . '">' . esc_html__( 'Configure a key', 'caw-plugin-builder' ) . '</a>.';
+		echo '</p></div>';
 	}
 
 	/**

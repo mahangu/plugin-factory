@@ -167,6 +167,41 @@ final class PollerTest extends IntegrationTestCase {
 	}
 
 	/**
+	 * A build whose files cannot be written to staging is failed, not completed.
+	 *
+	 * A build with no files on disk must never be allowed to look completed.
+	 */
+	public function test_staging_write_failure_fails_the_build(): void {
+		$authored = new AuthoredPlugin(
+			[ 'demo/demo.php' => Fixtures::clean( 'demo' ) ]
+		);
+		$progress = BuildProgress::succeeded(
+			$authored,
+			[
+				'lint'              => [ [ 'file' => 'demo/demo.php', 'exit_code' => 0, 'message' => 'ok' ] ],
+				'phpunit_junit_xml' => '<?xml version="1.0"?><testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0" assertions="1"/></testsuites>',
+				'phpstan_json'      => '',
+			]
+		);
+		$this->use_provider( new FakeProvider( $progress ) );
+		$build = $this->insert_build( Build::STATUS_BUILDING );
+
+		// Block the staging write by occupying the target "src" path with a
+		// file, so the directory it must become cannot be created.
+		$staging = Paths::build_staging_dir( $build->id );
+		$this->assertNotSame( '', $staging );
+		file_put_contents( $staging . '/src', 'not a directory' );
+
+		Poller::run();
+
+		$reloaded = $this->repo->find( $build->id );
+		$this->assertNotNull( $reloaded );
+		$this->assertSame( Build::STATUS_FAILED, $reloaded->status );
+		$this->assertStringContainsString( 'staging', $reloaded->error );
+		$this->assertFalse( $reloaded->has_artifact() );
+	}
+
+	/**
 	 * A failed poll result fails the build.
 	 */
 	public function test_failed_progress_fails_the_build(): void {

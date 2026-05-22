@@ -353,7 +353,12 @@ final class Poller {
 			return;
 		}
 
-		$this->write_staging( $build, $authored );
+		if ( ! $this->write_staging( $build, $authored ) ) {
+			$build->status = Build::STATUS_FAILED;
+			$build->error  = __( 'The build completed in the sandbox, but its files could not be written to staging on this host. Check the permissions of the wp-content/uploads directory.', 'caw-plugin-builder' );
+			Logger::error( 'Staging write failed; build cannot be packaged', [ 'build' => $build->id ] );
+			return;
+		}
 
 		$ci                = $harvester->harvest( $progress->raw_ci() );
 		$build->ci_report  = $ci->to_array();
@@ -388,29 +393,40 @@ final class Poller {
 	 * Agent-authored code lands ONLY here, under wp-content/uploads/caw-staging.
 	 * It is never written into wp-content/plugins by this method.
 	 *
+	 * A write failure is reported to the caller rather than swallowed: a build
+	 * with no files on disk must not be allowed to look completed.
+	 *
 	 * @param Build          $build    Build.
 	 * @param AuthoredPlugin $authored Authored plugin.
+	 * @return bool True when every file was written.
 	 */
-	private function write_staging( Build $build, AuthoredPlugin $authored ): void {
+	private function write_staging( Build $build, AuthoredPlugin $authored ): bool {
 		$staging = Paths::build_staging_dir( $build->id );
 		if ( '' === $staging ) {
-			return;
+			return false;
 		}
 		$src = $staging . '/src';
 		Paths::rmtree( $src );
-		wp_mkdir_p( $src );
+		if ( ! wp_mkdir_p( $src ) ) {
+			return false;
+		}
 
 		foreach ( $authored->files() as $relative => $contents ) {
 			$target = $src . '/' . $relative;
-			wp_mkdir_p( dirname( $target ) );
+			if ( ! wp_mkdir_p( dirname( $target ) ) ) {
+				return false;
+			}
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-			file_put_contents( $target, $contents );
+			if ( false === file_put_contents( $target, $contents ) ) {
+				return false;
+			}
 			if ( function_exists( 'opcache_invalidate' ) && str_ends_with( strtolower( $target ), '.php' ) ) {
 				opcache_invalidate( $target, true );
 			}
 		}
 
 		$build->staging_dir = $src;
+		return true;
 	}
 
 	/**
