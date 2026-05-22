@@ -13,7 +13,7 @@ define( 'CAW_PB_VERSION', '0.0.0' );
 define( 'CAW_PB_FILE', __FILE__ );
 define( 'CAW_PB_DIR', __DIR__ );
 define( 'CAW_PB_BASENAME', 'caw-plugin-builder/caw-plugin-builder.php' );
-define( 'CAW_PB_MIN_PHP', '8.1' );
+define( 'CAW_PB_MIN_PHP', '8.2' );
 
 // WordPress path constants are defined at runtime, not in the core stubs.
 define( 'ABSPATH', '/tmp/wp/' );

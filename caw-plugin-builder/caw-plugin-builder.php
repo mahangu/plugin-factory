@@ -5,7 +5,7 @@
  * Description:       Describe a plugin in natural language. An Anthropic Managed Agent authors and tests it in a hosted sandbox; a host-side safety gauntlet validates it before it ever touches your live site.
  * Version:           0.1.0
  * Requires at least: 6.4
- * Requires PHP:      8.1
+ * Requires PHP:      8.2
  * Author:            Plugin Factory
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -26,10 +26,11 @@ define( 'CAW_PB_VERSION', '0.1.0' );
 define( 'CAW_PB_FILE', __FILE__ );
 define( 'CAW_PB_DIR', __DIR__ );
 define( 'CAW_PB_BASENAME', plugin_basename( __FILE__ ) );
-define( 'CAW_PB_MIN_PHP', '8.1' );
+define( 'CAW_PB_MIN_PHP', '8.2' );
 
 /**
- * The plugin needs PHP 8.1+ (the bundled SDK uses enums and named arguments).
+ * The plugin requires PHP 8.2+ — the floor of currently security-supported
+ * PHP, and the version the bundled dependencies are resolved against.
  *
  * A version mismatch must NEVER fatal the host: we detect it, show an admin
  * notice, and self-deactivate. This runs before the autoloader is touched.

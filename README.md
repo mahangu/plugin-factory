@@ -170,7 +170,7 @@ hosted-agent equivalent exists today.
 ## Requirements
 
 - WordPress 6.4+ (the Connectors API integration activates on 7.0+)
-- PHP 8.1+
+- PHP 8.2+ (the floor of currently security-supported PHP)
 - For **local installation**: `exec()`, a CLI PHP binary, and the `zip` extension
 - An Anthropic API key with Managed Agents access
 
