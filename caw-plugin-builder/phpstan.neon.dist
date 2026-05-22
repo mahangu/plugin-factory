@@ -1,0 +1,15 @@
+parameters:
+	level: 5
+	paths:
+		- includes
+		- caw-plugin-builder.php
+		- uninstall.php
+	excludePaths:
+		# A standalone CLI script, run only via exec(); analysed by its own tests.
+		- includes/Gates/probe-harness.php
+	bootstrapFiles:
+		- ../phpstan-bootstrap.php
+	scanFiles:
+		- vendor/php-stubs/wordpress-stubs/wordpress-stubs.php
+		- ../phpstan-stubs.php
+	treatPhpDocTypesAsCertain: false

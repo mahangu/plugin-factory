@@ -115,7 +115,7 @@ final class Logger {
 		}
 
 		$content = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
-		$all     = array_values( array_filter( explode( "\n", $content ), 'strlen' ) );
+		$all     = array_values( array_filter( explode( "\n", $content ), static fn ( string $line ): bool => '' !== $line ) );
 
 		return array_slice( $all, -$lines );
 	}

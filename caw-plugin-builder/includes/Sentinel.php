@@ -108,6 +108,11 @@ final class Sentinel {
 		if ( ! is_array( $managed ) ) {
 			return [];
 		}
-		return array_values( array_filter( array_map( 'strval', $managed ), 'strlen' ) );
+		return array_values(
+			array_filter(
+				array_map( 'strval', $managed ),
+				static fn ( string $item ): bool => '' !== $item
+			)
+		);
 	}
 }

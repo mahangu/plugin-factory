@@ -273,7 +273,12 @@ final class RuntimeProbeGate {
 	 * @return string[] Trailing lines.
 	 */
 	private function tail_lines( string $text, int $count = 20 ): array {
-		$lines = array_values( array_filter( array_map( 'trim', explode( "\n", $text ) ), 'strlen' ) );
+		$lines = array_values(
+			array_filter(
+				array_map( 'trim', explode( "\n", $text ) ),
+				static fn ( string $line ): bool => '' !== $line
+			)
+		);
 		$lines = array_slice( $lines, -$count );
 		return array_map( [ Logger::class, 'redact' ], $lines );
 	}

@@ -11,7 +11,6 @@ namespace CAW\PluginBuilder\Agent;
 
 use Anthropic\Core\Exceptions\APIConnectionException;
 use Anthropic\Core\Exceptions\APIException;
-use Anthropic\Core\Exceptions\APITimeoutException;
 use CAW\PluginBuilder\Support\Logger;
 
 /**
@@ -31,7 +30,8 @@ final class ApiErrors {
 	 * @return bool True when a later retry might succeed.
 	 */
 	public static function is_retryable( \Throwable $e ): bool {
-		if ( $e instanceof APIConnectionException || $e instanceof APITimeoutException ) {
+		// APIConnectionException also covers its APITimeoutException subclass.
+		if ( $e instanceof APIConnectionException ) {
 			return true;
 		}
 		if ( $e instanceof APIException ) {

@@ -56,10 +56,7 @@ final class Capabilities {
 			return false;
 		}
 		$disabled = array_map( 'trim', explode( ',', (string) ini_get( 'disable_functions' ) ) );
-		if ( in_array( 'exec', $disabled, true ) ) {
-			return false;
-		}
-		return ! self::is_safe_mode_like();
+		return ! in_array( 'exec', $disabled, true );
 	}
 
 	/**
@@ -75,14 +72,13 @@ final class Capabilities {
 
 		$candidates = [];
 
-		if ( defined( 'PHP_BINARY' ) && PHP_BINARY ) {
+		if ( '' !== PHP_BINARY ) {
 			// When running under the CLI SAPI this is the binary directly.
 			if ( false !== strpos( PHP_SAPI, 'cli' ) ) {
 				$candidates[] = PHP_BINARY;
 			}
 			// Otherwise PHP_BINARY points at php-fpm/apache; try a sibling php.
-			$dir = dirname( PHP_BINARY );
-			$candidates[] = $dir . '/php';
+			$candidates[] = dirname( PHP_BINARY ) . '/php';
 		}
 
 		$candidates[] = '/usr/bin/php';
@@ -98,7 +94,7 @@ final class Capabilities {
 
 		Logger::warn( 'No usable CLI PHP binary found' );
 		$cached = '';
-		return $cached;
+		return '';
 	}
 
 	/**
@@ -176,24 +172,5 @@ final class Capabilities {
 		return 0 === $status
 			&& isset( $output[0] )
 			&& false !== stripos( (string) $output[0], 'php' );
-	}
-
-	/**
-	 * Rough check for legacy "safe mode"-style hardening that blocks exec().
-	 *
-	 * @return bool True when the environment looks locked down.
-	 */
-	private static function is_safe_mode_like(): bool {
-		// Some managed hosts expose a phantom "open_basedir" that, combined with
-		// disabled proc functions, makes exec() unusable even when callable.
-		$disabled = array_map( 'trim', explode( ',', (string) ini_get( 'disable_functions' ) ) );
-		foreach ( [ 'proc_open', 'popen', 'shell_exec' ] as $fn ) {
-			if ( in_array( $fn, $disabled, true ) ) {
-				// exec() itself may still work; this is only a soft signal and
-				// does not by itself disqualify exec().
-				continue;
-			}
-		}
-		return false;
 	}
 }
