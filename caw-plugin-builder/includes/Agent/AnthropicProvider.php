@@ -212,6 +212,14 @@ final class AnthropicProvider implements BuildProvider {
 	/**
 	 * Find the caw_submit_build custom tool call among the session's events.
 	 *
+	 * The events are fetched without a server-side `types` filter: the SDK
+	 * serializes an array query parameter as `types[0]=...`, but the Managed
+	 * Agents events endpoint only accepts the indexless `types[]=...` form and
+	 * rejects the request with HTTP 400 otherwise. Filtering is done
+	 * client-side instead, which is reliable here because the submission is the
+	 * agent's final action and `order: 'desc'` with a generous limit captures
+	 * it on the first page.
+	 *
 	 * @param string $session_id Session id.
 	 * @return ManagedAgentsAgentCustomToolUseEvent|null The submission event, or null.
 	 */
@@ -220,7 +228,6 @@ final class AnthropicProvider implements BuildProvider {
 			$session_id,
 			limit: 100,
 			order: 'desc',
-			types: [ 'agent.custom_tool_use' ],
 			betas: [ self::BETA ],
 		);
 
