@@ -58,6 +58,22 @@ final class Poller {
 	public const SCHEDULE = 'caw_poll_interval';
 
 	/**
+	 * Option holding the Unix timestamp of the last completed poll run.
+	 */
+	public const LAST_POLL_OPTION = 'caw_last_poll';
+
+	/**
+	 * Cache/transient key for the run lock.
+	 */
+	private const LOCK_KEY = 'caw_poll_lock';
+
+	/**
+	 * Lifetime of the run lock, in seconds. A crashed poll self-heals once it
+	 * expires; comfortably longer than a normal run.
+	 */
+	private const LOCK_TTL = 300;
+
+	/**
 	 * Poll interval in seconds.
 	 */
 	private const INTERVAL = 120;
@@ -145,8 +161,64 @@ final class Poller {
 
 	/**
 	 * Cron callback: advance every active build by one step.
+	 *
+	 * Guarded by a short-lived lock. WP-Cron can fire the recurring tick and
+	 * the caw_poll_now nudge in overlapping requests; without the lock both
+	 * could call provider->start() on the same pending build, creating
+	 * duplicate sandbox sessions and double Anthropic billing.
 	 */
 	public static function run(): void {
+		if ( ! self::acquire_lock() ) {
+			Logger::info( 'Poll skipped: another poll run holds the lock' );
+			return;
+		}
+
+		try {
+			self::process_active_builds();
+		} finally {
+			update_option( self::LAST_POLL_OPTION, time(), false );
+			self::release_lock();
+		}
+	}
+
+	/**
+	 * Acquire the run lock.
+	 *
+	 * With a persistent object cache this is a genuinely atomic wp_cache_add().
+	 * Without one it falls back to a transient: its read-then-write is not
+	 * atomic, so a sub-millisecond overlap is still theoretically possible —
+	 * but it collapses the window from "always" to "vanishingly rare", and the
+	 * 300s TTL means a crashed run cannot wedge the poller permanently. A
+	 * fully atomic DB lock for that case is noted as a follow-up.
+	 *
+	 * @return bool True when the lock was acquired by this call.
+	 */
+	private static function acquire_lock(): bool {
+		if ( wp_using_ext_object_cache() ) {
+			return wp_cache_add( self::LOCK_KEY, time(), 'caw-plugin-builder', self::LOCK_TTL );
+		}
+		if ( false !== get_transient( self::LOCK_KEY ) ) {
+			return false;
+		}
+		set_transient( self::LOCK_KEY, time(), self::LOCK_TTL );
+		return true;
+	}
+
+	/**
+	 * Release the run lock.
+	 */
+	private static function release_lock(): void {
+		if ( wp_using_ext_object_cache() ) {
+			wp_cache_delete( self::LOCK_KEY, 'caw-plugin-builder' );
+			return;
+		}
+		delete_transient( self::LOCK_KEY );
+	}
+
+	/**
+	 * Advance every active build by one step. Always called under the lock.
+	 */
+	private static function process_active_builds(): void {
 		$repository = new BuildRepository();
 		$builds     = $repository->find_active( self::BATCH );
 		if ( [] === $builds ) {
@@ -284,7 +356,12 @@ final class Poller {
 			return;
 		}
 
-		$this->write_staging( $build, $authored );
+		if ( ! $this->write_staging( $build, $authored ) ) {
+			$build->status = Build::STATUS_FAILED;
+			$build->error  = __( 'The build completed in the sandbox, but its files could not be written to staging on this host. Check the permissions of the wp-content/uploads directory.', 'caw-plugin-builder' );
+			Logger::error( 'Staging write failed; build cannot be packaged', [ 'build' => $build->id ] );
+			return;
+		}
 
 		$ci                = $harvester->harvest( $progress->raw_ci() );
 		$build->ci_report  = $ci->to_array();
@@ -319,29 +396,40 @@ final class Poller {
 	 * Agent-authored code lands ONLY here, under wp-content/uploads/caw-staging.
 	 * It is never written into wp-content/plugins by this method.
 	 *
+	 * A write failure is reported to the caller rather than swallowed: a build
+	 * with no files on disk must not be allowed to look completed.
+	 *
 	 * @param Build          $build    Build.
 	 * @param AuthoredPlugin $authored Authored plugin.
+	 * @return bool True when every file was written.
 	 */
-	private function write_staging( Build $build, AuthoredPlugin $authored ): void {
+	private function write_staging( Build $build, AuthoredPlugin $authored ): bool {
 		$staging = Paths::build_staging_dir( $build->id );
 		if ( '' === $staging ) {
-			return;
+			return false;
 		}
 		$src = $staging . '/src';
 		Paths::rmtree( $src );
-		wp_mkdir_p( $src );
+		if ( ! wp_mkdir_p( $src ) ) {
+			return false;
+		}
 
 		foreach ( $authored->files() as $relative => $contents ) {
 			$target = $src . '/' . $relative;
-			wp_mkdir_p( dirname( $target ) );
+			if ( ! wp_mkdir_p( dirname( $target ) ) ) {
+				return false;
+			}
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-			file_put_contents( $target, $contents );
+			if ( false === file_put_contents( $target, $contents ) ) {
+				return false;
+			}
 			if ( function_exists( 'opcache_invalidate' ) && str_ends_with( strtolower( $target ), '.php' ) ) {
 				opcache_invalidate( $target, true );
 			}
 		}
 
 		$build->staging_dir = $src;
+		return true;
 	}
 
 	/**

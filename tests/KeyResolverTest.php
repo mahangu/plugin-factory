@@ -13,11 +13,11 @@ use CAW\PluginBuilder\KeyResolution;
 use CAW\PluginBuilder\KeyResolver;
 
 /**
- * Pins the key-resolution precedence to WordPress core's documented order:
- * environment variable, PHP constant, Connectors API setting, legacy option.
+ * Pins the key-resolution precedence:
+ * environment variable, PHP constant, the plugin's own key field (with the
+ * pre-0.1 option as a migration fallback), then the Connectors API setting.
  *
- * The rig is WordPress 7.0 with the Connectors API present, so the legacy
- * option must be IGNORED here — that branch is a pre-7.0 fallback only.
+ * The plugin's own field deliberately outranks the Connectors API setting.
  */
 final class KeyResolverTest extends IntegrationTestCase {
 
@@ -34,8 +34,9 @@ final class KeyResolverTest extends IntegrationTestCase {
 		parent::setUp();
 		$this->saved_env = getenv( self::ENV_VAR );
 		putenv( self::ENV_VAR );
-		delete_option( self::DB_SETTING );
+		delete_option( KeyResolver::OPTION );
 		delete_option( KeyResolver::LEGACY_OPTION );
+		delete_option( self::DB_SETTING );
 	}
 
 	/**
@@ -47,8 +48,9 @@ final class KeyResolverTest extends IntegrationTestCase {
 		} else {
 			putenv( self::ENV_VAR . '=' . $this->saved_env );
 		}
-		delete_option( self::DB_SETTING );
+		delete_option( KeyResolver::OPTION );
 		delete_option( KeyResolver::LEGACY_OPTION );
+		delete_option( self::DB_SETTING );
 		parent::tearDown();
 	}
 
@@ -75,6 +77,19 @@ final class KeyResolverTest extends IntegrationTestCase {
 	}
 
 	/**
+	 * The plugin's own key option is resolved with the plugin source.
+	 */
+	public function test_resolves_from_plugin_option(): void {
+		update_option( KeyResolver::OPTION, 'sk-ant-plugin-key' );
+
+		$resolution = ( new KeyResolver() )->resolve();
+
+		$this->assertTrue( $resolution->is_resolved() );
+		$this->assertSame( KeyResolution::SOURCE_PLUGIN, $resolution->source() );
+		$this->assertSame( 'sk-ant-plugin-key', $resolution->key() );
+	}
+
+	/**
 	 * The Connectors API database setting is resolved with the database source.
 	 */
 	public function test_resolves_from_connectors_setting(): void {
@@ -88,11 +103,11 @@ final class KeyResolverTest extends IntegrationTestCase {
 	}
 
 	/**
-	 * The environment variable wins over the Connectors API setting.
+	 * The environment variable wins over the plugin option.
 	 */
-	public function test_environment_beats_database(): void {
+	public function test_environment_beats_plugin_option(): void {
 		putenv( self::ENV_VAR . '=sk-ant-env-wins' );
-		update_option( self::DB_SETTING, 'sk-ant-db-loses' );
+		update_option( KeyResolver::OPTION, 'sk-ant-plugin-loses' );
 
 		$resolution = ( new KeyResolver() )->resolve();
 
@@ -101,21 +116,46 @@ final class KeyResolverTest extends IntegrationTestCase {
 	}
 
 	/**
-	 * On a host with the Connectors API, the legacy option is never consulted.
+	 * The plugin's own field outranks the Connectors API setting.
 	 */
-	public function test_legacy_option_ignored_when_connectors_api_present(): void {
+	public function test_plugin_option_beats_connectors_setting(): void {
+		update_option( KeyResolver::OPTION, 'sk-ant-plugin-wins' );
+		update_option( self::DB_SETTING, 'sk-ant-db-loses' );
+
+		$resolution = ( new KeyResolver() )->resolve();
+
+		$this->assertSame( KeyResolution::SOURCE_PLUGIN, $resolution->source() );
+		$this->assertSame( 'sk-ant-plugin-wins', $resolution->key() );
+	}
+
+	/**
+	 * The pre-0.1 option still resolves, as a migration fallback.
+	 */
+	public function test_legacy_option_is_a_migration_fallback(): void {
 		update_option( KeyResolver::LEGACY_OPTION, 'sk-ant-legacy-key' );
 
 		$resolution = ( new KeyResolver() )->resolve();
 
-		$this->assertFalse(
-			$resolution->is_resolved(),
-			'The legacy option must be ignored on WordPress 7.0+.'
-		);
+		$this->assertTrue( $resolution->is_resolved() );
+		$this->assertSame( KeyResolution::SOURCE_LEGACY, $resolution->source() );
+		$this->assertSame( 'sk-ant-legacy-key', $resolution->key() );
 	}
 
 	/**
-	 * A PHP constant is resolved, and beats the database, in a fresh process.
+	 * The current plugin option wins over the legacy migration option.
+	 */
+	public function test_plugin_option_beats_legacy_option(): void {
+		update_option( KeyResolver::OPTION, 'sk-ant-current-wins' );
+		update_option( KeyResolver::LEGACY_OPTION, 'sk-ant-legacy-loses' );
+
+		$resolution = ( new KeyResolver() )->resolve();
+
+		$this->assertSame( KeyResolution::SOURCE_PLUGIN, $resolution->source() );
+		$this->assertSame( 'sk-ant-current-wins', $resolution->key() );
+	}
+
+	/**
+	 * A PHP constant is resolved, and beats the plugin option, in a fresh process.
 	 *
 	 * The constant cannot be undefined once set, so this case is exercised in
 	 * a subprocess to keep it isolated from the rest of the suite.
@@ -123,14 +163,14 @@ final class KeyResolverTest extends IntegrationTestCase {
 	public function test_resolves_from_constant_in_subprocess(): void {
 		$script = sprintf(
 			'<?php require %s; putenv("ANTHROPIC_API_KEY"); '
-			. 'update_option(%s, "sk-ant-db-loses"); '
+			. 'update_option(%s, "sk-ant-plugin-loses"); '
 			. 'define("ANTHROPIC_API_KEY", "sk-ant-const-wins"); '
 			. '$r = (new \CAW\PluginBuilder\KeyResolver())->resolve(); '
 			. 'echo $r->source() . "|" . $r->key(); '
 			. 'delete_option(%s);',
 			var_export( CAW_TEST_WP_PATH . '/wp-load.php', true ),
-			var_export( self::DB_SETTING, true ),
-			var_export( self::DB_SETTING, true )
+			var_export( KeyResolver::OPTION, true ),
+			var_export( KeyResolver::OPTION, true )
 		);
 
 		$file = $this->make_scratch_file( '.php' );

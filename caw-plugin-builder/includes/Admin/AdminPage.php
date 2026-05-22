@@ -9,15 +9,15 @@ declare(strict_types=1);
 
 namespace CAW\PluginBuilder\Admin;
 
+use CAW\PluginBuilder\Agent\AgentService;
 use CAW\PluginBuilder\Build\Build;
 use CAW\PluginBuilder\Build\BuildRepository;
 use CAW\PluginBuilder\Capabilities;
 use CAW\PluginBuilder\Cron\Poller;
-use CAW\PluginBuilder\Gates\GateReport;
 use CAW\PluginBuilder\Gates\HostGatePipeline;
 use CAW\PluginBuilder\Installer;
 use CAW\PluginBuilder\KeyResolver;
-use CAW\PluginBuilder\Sentinel;
+use CAW\PluginBuilder\Support\Logger;
 use CAW\PluginBuilder\Support\Paths;
 
 /**
@@ -56,6 +56,7 @@ final class AdminPage {
 		add_action( 'admin_post_caw_install_build', [ $this, 'handle_install' ] );
 		add_action( 'admin_post_caw_download_build', [ $this, 'handle_download' ] );
 		add_action( 'admin_post_caw_delete_build', [ $this, 'handle_delete' ] );
+		add_action( 'admin_post_caw_advance_builds', [ $this, 'handle_advance' ] );
 	}
 
 	/**
@@ -107,19 +108,51 @@ final class AdminPage {
 	}
 
 	/**
-	 * Register the legacy API key setting (used only on pre-7.0 hosts).
+	 * Register the plugin's Anthropic API key setting.
+	 *
+	 * The sanitize callback also runs a lightweight validation of a newly
+	 * entered key against the Managed Agents API.
 	 */
 	public function register_settings(): void {
 		register_setting(
 			'caw_plugin_builder_settings',
-			KeyResolver::LEGACY_OPTION,
+			KeyResolver::OPTION,
 			[
 				'type'              => 'string',
-				'sanitize_callback' => 'sanitize_text_field',
+				'sanitize_callback' => [ $this, 'sanitize_api_key' ],
 				'default'           => '',
 				'show_in_rest'      => false,
 			]
 		);
+	}
+
+	/**
+	 * Sanitise — and lightly validate — a submitted API key.
+	 *
+	 * A blank submission keeps the existing key (the field is never pre-filled
+	 * with the secret, so blank means "leave unchanged"). A new, non-empty key
+	 * is verified against the Managed Agents API, with the result surfaced as a
+	 * settings notice. Validation never blocks the save.
+	 *
+	 * @param mixed $value Raw submitted value.
+	 * @return string The value to store.
+	 */
+	public function sanitize_api_key( $value ): string {
+		$value = sanitize_text_field( (string) $value );
+		$old   = (string) get_option( KeyResolver::OPTION, '' );
+
+		if ( '' === $value ) {
+			// The field is intentionally never pre-filled with the secret, so a
+			// blank submission means "keep the current key", not "clear it".
+			return $old;
+		}
+
+		if ( $value !== $old ) {
+			$result = ( new AgentService( $value ) )->check_credentials();
+			add_settings_error( KeyResolver::OPTION, 'caw_key_check', $result['message'], $result['level'] );
+		}
+
+		return $value;
 	}
 
 	/**
@@ -162,6 +195,7 @@ final class AdminPage {
 		$this->notices();
 		$this->key_banner();
 		$this->capability_banner();
+		$this->cron_banner();
 
 		$resolution = ( new KeyResolver() )->resolve();
 
@@ -187,7 +221,18 @@ final class AdminPage {
 		echo '</div>';
 
 		$builds = $this->builds->find_recent( 50 );
+
+		echo '<div class="caw-builds-header">';
 		echo '<h2>' . esc_html__( 'Builds', 'caw-plugin-builder' ) . '</h2>';
+		if ( [] !== $builds ) {
+			// Advance the queue without waiting for the next WP-Cron tick.
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			wp_nonce_field( 'caw_advance_builds' );
+			echo '<input type="hidden" name="action" value="caw_advance_builds" />';
+			submit_button( __( 'Advance builds now', 'caw-plugin-builder' ), 'secondary', 'submit', false );
+			echo '</form>';
+		}
+		echo '</div>';
 
 		if ( [] === $builds ) {
 			echo '<p>' . esc_html__( 'No builds yet.', 'caw-plugin-builder' ) . '</p>';
@@ -200,6 +245,7 @@ final class AdminPage {
 		echo '<th>' . esc_html__( 'Slug', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Request', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Status', 'caw-plugin-builder' ) . '</th>';
+		echo '<th>' . esc_html__( 'Elapsed', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Created', 'caw-plugin-builder' ) . '</th>';
 		echo '</tr></thead><tbody>';
 
@@ -210,6 +256,7 @@ final class AdminPage {
 			echo '<td><code>' . esc_html( $build->slug ) . '</code></td>';
 			echo '<td>' . esc_html( $this->excerpt( $build->prompt, 70 ) ) . '</td>';
 			echo '<td>' . $this->status_badge( $build ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo '<td>' . esc_html( $this->elapsed_label( $build ) ) . '</td>';
 			echo '<td>' . esc_html( $build->created_at ) . '</td>';
 			echo '</tr>';
 		}
@@ -232,10 +279,18 @@ final class AdminPage {
 		echo '<p><a href="' . esc_url( $this->menu_url() ) . '">&larr; ' . esc_html__( 'All builds', 'caw-plugin-builder' ) . '</a></p>';
 
 		$this->notices();
+		$this->pending_without_key_hint( $build );
 
 		echo '<div class="caw-card">';
 		echo '<h2>' . esc_html__( 'Request', 'caw-plugin-builder' ) . '</h2>';
 		echo '<p><strong>' . esc_html__( 'Slug:', 'caw-plugin-builder' ) . '</strong> <code>' . esc_html( $build->slug ) . '</code></p>';
+		$elapsed = $this->elapsed_label( $build );
+		if ( '' !== $elapsed ) {
+			$time_label = $build->is_active()
+				? __( 'Running for:', 'caw-plugin-builder' )
+				: __( 'Build time:', 'caw-plugin-builder' );
+			echo '<p><strong>' . esc_html( $time_label ) . '</strong> ' . esc_html( $elapsed ) . '</p>';
+		}
 		echo '<blockquote class="caw-prompt">' . nl2br( esc_html( $build->prompt ) ) . '</blockquote>';
 		if ( '' !== $build->error ) {
 			echo '<p class="caw-error"><strong>' . esc_html__( 'Error:', 'caw-plugin-builder' ) . '</strong> ' . esc_html( $build->error ) . '</p>';
@@ -497,26 +552,84 @@ final class AdminPage {
 		echo '<div class="wrap caw-wrap">';
 		echo '<h1>' . esc_html__( 'Plugin Builder Settings', 'caw-plugin-builder' ) . '</h1>';
 
+		settings_errors( KeyResolver::OPTION );
 		$this->key_banner();
+		$this->render_key_card();
+		$this->render_diagnostics();
+		$this->render_log_card();
+		echo '</div>';
+	}
 
-		if ( Capabilities::has_connectors_api() ) {
-			echo '<div class="caw-card"><p>';
-			echo esc_html__( 'This site has the WordPress 7.0 Connectors API. Manage the Anthropic API key under Settings → Connectors; this plugin reads it automatically.', 'caw-plugin-builder' );
-			echo '</p></div>';
-		} else {
-			echo '<div class="caw-card">';
-			echo '<h2>' . esc_html__( 'Anthropic API key (legacy)', 'caw-plugin-builder' ) . '</h2>';
-			echo '<p class="caw-muted">' . esc_html__( 'This site predates the Connectors API. The key is stored as a plugin option. An environment variable or PHP constant named ANTHROPIC_API_KEY always takes precedence.', 'caw-plugin-builder' ) . '</p>';
-			echo '<form method="post" action="' . esc_url( admin_url( 'options.php' ) ) . '">';
-			settings_fields( 'caw_plugin_builder_settings' );
-			$current = (string) get_option( KeyResolver::LEGACY_OPTION, '' );
-			echo '<p><input type="password" name="' . esc_attr( KeyResolver::LEGACY_OPTION ) . '" value="' . esc_attr( $current ) . '" class="regular-text" autocomplete="off" placeholder="sk-ant-..." /></p>';
-			submit_button( __( 'Save key', 'caw-plugin-builder' ) );
-			echo '</form>';
+	/**
+	 * Render the collapsible diagnostic log card.
+	 *
+	 * Surfaces Logger::tail() so a failing build can be diagnosed from the
+	 * admin UI. The whole settings page is already manage_options-gated.
+	 */
+	private function render_log_card(): void {
+		$lines = Logger::tail( 200 );
+
+		echo '<div class="caw-card">';
+		echo '<h2>' . esc_html__( 'Diagnostic log', 'caw-plugin-builder' ) . '</h2>';
+
+		if ( [] === $lines ) {
+			echo '<p class="caw-muted">' . esc_html__( 'The log is empty.', 'caw-plugin-builder' ) . '</p>';
 			echo '</div>';
+			return;
 		}
 
-		$this->render_diagnostics();
+		echo '<details class="caw-file">';
+		echo '<summary>';
+		printf(
+			/* translators: %d: number of log lines */
+			esc_html__( 'Show the last %d log lines', 'caw-plugin-builder' ),
+			count( $lines )
+		);
+		echo '</summary>';
+		echo '<pre class="caw-log">' . esc_html( implode( "\n", $lines ) ) . '</pre>';
+		echo '</details>';
+		echo '</div>';
+	}
+
+	/**
+	 * Render the Anthropic API key card.
+	 *
+	 * The field is ALWAYS rendered. CAW calls the Managed Agents API directly
+	 * and does not use the WP AI Client, so it owns its own key rather than
+	 * deferring to Settings → Connectors (which on stock WordPress 7.0 cannot
+	 * accept an Anthropic key without the ai-provider-for-anthropic plugin).
+	 *
+	 * The stored secret is never echoed back into the field — a blank field
+	 * means "keep the current key".
+	 */
+	private function render_key_card(): void {
+		$has_key = '' !== (string) get_option( KeyResolver::OPTION, '' );
+
+		echo '<div class="caw-card">';
+		echo '<h2>' . esc_html__( 'Anthropic API key', 'caw-plugin-builder' ) . '</h2>';
+		echo '<p class="caw-muted">' . esc_html__( 'CAW Plugin Builder calls the Anthropic Managed Agents API directly. Enter a key from an account with Managed Agents beta access. An ANTHROPIC_API_KEY environment variable or PHP constant, if set, takes precedence over this field.', 'caw-plugin-builder' ) . '</p>';
+
+		echo '<form method="post" action="' . esc_url( admin_url( 'options.php' ) ) . '">';
+		settings_fields( 'caw_plugin_builder_settings' );
+		echo '<p><label for="caw-api-key"><strong>' . esc_html__( 'API key', 'caw-plugin-builder' ) . '</strong></label><br />';
+		echo '<input type="password" id="caw-api-key" name="' . esc_attr( KeyResolver::OPTION ) . '" value="" class="regular-text" autocomplete="off" placeholder="sk-ant-..." /></p>';
+		if ( $has_key ) {
+			echo '<p class="description">' . esc_html__( 'A key is currently saved. Leave this blank to keep it, or enter a new key to replace it.', 'caw-plugin-builder' ) . '</p>';
+		}
+		submit_button( __( 'Save key', 'caw-plugin-builder' ) );
+		echo '</form>';
+
+		// The Connectors API is offered as an optional alternative, not a
+		// redirect: CAW reads its setting only as a lower-priority fallback.
+		if ( Capabilities::anthropic_connector_registered() ) {
+			echo '<p class="caw-muted">';
+			printf(
+				/* translators: %s: link to Settings -> Connectors */
+				esc_html__( 'Optionally, the Anthropic key can instead be managed under %s. CAW reads that setting only as a lower-priority fallback — the field above always takes precedence.', 'caw-plugin-builder' ),
+				'<a href="' . esc_url( admin_url( 'options-general.php?page=connectors' ) ) . '">' . esc_html__( 'Settings → Connectors', 'caw-plugin-builder' ) . '</a>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			);
+			echo '</p>';
+		}
 		echo '</div>';
 	}
 
@@ -535,6 +648,8 @@ final class AdminPage {
 			__( 'exec() available', 'caw-plugin-builder' )       => $summary['can_exec'] ? __( 'yes', 'caw-plugin-builder' ) : __( 'no', 'caw-plugin-builder' ),
 			__( 'Local install', 'caw-plugin-builder' )          => $summary['can_install_locally'] ? __( 'enabled', 'caw-plugin-builder' ) : __( 'disabled', 'caw-plugin-builder' ),
 			__( 'Watchdog mu-plugin', 'caw-plugin-builder' )     => Installer::watchdog_installed() ? __( 'installed', 'caw-plugin-builder' ) : __( 'missing', 'caw-plugin-builder' ),
+			__( 'WP-Cron', 'caw-plugin-builder' )                => ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) ? __( 'disabled (DISABLE_WP_CRON)', 'caw-plugin-builder' ) : __( 'enabled', 'caw-plugin-builder' ),
+			__( 'Last build poll', 'caw-plugin-builder' )        => $this->last_poll_label(),
 		];
 		foreach ( $rows as $label => $value ) {
 			echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td>' . esc_html( $value ) . '</td></tr>';
@@ -662,6 +777,25 @@ final class AdminPage {
 	}
 
 	/**
+	 * Handle the "Advance builds now" action.
+	 *
+	 * Runs a poll immediately instead of waiting for the next WP-Cron tick.
+	 * Poller::run() is itself lock-guarded, so this is safe to invoke even
+	 * while a scheduled poll is in flight.
+	 */
+	public function handle_advance(): void {
+		$this->guard( 'caw_advance_builds' );
+
+		Poller::run();
+
+		$this->redirect_with_notice(
+			$this->menu_url(),
+			'success',
+			__( 'The build queue was advanced.', 'caw-plugin-builder' )
+		);
+	}
+
+	/**
 	 * Verify nonce + capability for a POST action, or die.
 	 *
 	 * @param string $nonce_action Nonce action string.
@@ -712,6 +846,77 @@ final class AdminPage {
 			echo '<li>' . esc_html( $blocker ) . '</li>';
 		}
 		echo '</ul></div>';
+	}
+
+	/**
+	 * Explain why a build is stuck when it is queued but no API key resolves.
+	 *
+	 * @param Build $build Build.
+	 */
+	private function pending_without_key_hint( Build $build ): void {
+		if ( Build::STATUS_PENDING !== $build->status ) {
+			return;
+		}
+		$resolver = new KeyResolver();
+		if ( $resolver->resolve()->is_resolved() ) {
+			return;
+		}
+		echo '<div class="notice notice-warning inline"><p>';
+		echo esc_html__( 'This build is queued but cannot start: no Anthropic API key is configured. It will begin automatically once a key is available.', 'caw-plugin-builder' ) . ' ';
+		echo '<a href="' . esc_url( $resolver->settings_link() ) . '">' . esc_html__( 'Configure a key', 'caw-plugin-builder' ) . '</a>.';
+		echo '</p></div>';
+	}
+
+	/**
+	 * Render a warning when WP-Cron is disabled, since builds rely on it.
+	 */
+	private function cron_banner(): void {
+		if ( ! ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) ) {
+			return;
+		}
+		echo '<div class="notice notice-warning inline"><p>';
+		echo esc_html__( 'WP-Cron is disabled on this site (DISABLE_WP_CRON is set), so builds will not progress on their own. Use "Advance builds now" below, or make sure a real system cron runs wp-cron.php.', 'caw-plugin-builder' );
+		echo '</p></div>';
+	}
+
+	/**
+	 * Human-readable elapsed time for a build.
+	 *
+	 * For an active build this is the time since it was created; for a finished
+	 * build it is the time from creation to its last update.
+	 *
+	 * @param Build $build Build.
+	 * @return string Elapsed label, or '' when timestamps are unavailable.
+	 */
+	private function elapsed_label( Build $build ): string {
+		$start = strtotime( $build->created_at . ' UTC' );
+		if ( false === $start ) {
+			return '';
+		}
+		if ( $build->is_active() ) {
+			$end = time();
+		} else {
+			$updated = strtotime( $build->updated_at . ' UTC' );
+			$end     = false !== $updated ? $updated : $start;
+		}
+		return human_time_diff( $start, max( $start, $end ) );
+	}
+
+	/**
+	 * Human-readable description of when the poller last ran.
+	 *
+	 * @return string Label.
+	 */
+	private function last_poll_label(): string {
+		$last = (int) get_option( Poller::LAST_POLL_OPTION, 0 );
+		if ( $last <= 0 ) {
+			return __( 'never', 'caw-plugin-builder' );
+		}
+		return sprintf(
+			/* translators: %s: human-readable time difference, e.g. "5 mins" */
+			__( '%s ago', 'caw-plugin-builder' ),
+			human_time_diff( $last, time() )
+		);
 	}
 
 	/**

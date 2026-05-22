@@ -1,0 +1,44 @@
+name: Release
+
+# Builds an installable plugin zip when a v* tag is pushed (which also covers
+# publishing a release through the GitHub UI, since that creates the tag).
+# vendor/ is gitignored, so a WordPress admin cannot run Composer — this
+# workflow produces and attaches an artifact with dependencies bundled.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and attach plugin zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+          coverage: none
+
+      - name: Build distributable zip
+        run: bash bin/build-zip.sh
+
+      - name: Create or update the release and attach the zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" build/caw-plugin-builder.zip --clobber
+          else
+            gh release create "$TAG" build/caw-plugin-builder.zip \
+              --title "$TAG" --generate-notes --verify-tag
+          fi

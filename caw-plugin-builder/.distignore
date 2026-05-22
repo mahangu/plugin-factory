@@ -1,0 +1,8 @@
+# Files excluded from the distributable plugin zip built by bin/build-zip.sh.
+# The runtime dependency tree under vendor/ is intentionally NOT listed here —
+# it is bundled into the release artifact so admins can install without Composer.
+/.distignore
+/.gitignore
+/composer.json
+/composer.lock
+/phpstan.neon.dist

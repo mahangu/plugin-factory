@@ -44,6 +44,7 @@ final class PollerTest extends IntegrationTestCase {
 		$this->repo      = new BuildRepository();
 		$this->saved_env = getenv( 'ANTHROPIC_API_KEY' );
 		putenv( 'ANTHROPIC_API_KEY=sk-ant-fake-for-poller' );
+		delete_transient( 'caw_poll_lock' );
 	}
 
 	/**
@@ -70,6 +71,9 @@ final class PollerTest extends IntegrationTestCase {
 			$this->repo->delete( $id );
 		}
 		$this->build_ids = [];
+
+		delete_transient( 'caw_poll_lock' );
+		delete_option( 'caw_last_poll' );
 
 		parent::tearDown();
 	}
@@ -163,6 +167,41 @@ final class PollerTest extends IntegrationTestCase {
 	}
 
 	/**
+	 * A build whose files cannot be written to staging is failed, not completed.
+	 *
+	 * A build with no files on disk must never be allowed to look completed.
+	 */
+	public function test_staging_write_failure_fails_the_build(): void {
+		$authored = new AuthoredPlugin(
+			[ 'demo/demo.php' => Fixtures::clean( 'demo' ) ]
+		);
+		$progress = BuildProgress::succeeded(
+			$authored,
+			[
+				'lint'              => [ [ 'file' => 'demo/demo.php', 'exit_code' => 0, 'message' => 'ok' ] ],
+				'phpunit_junit_xml' => '<?xml version="1.0"?><testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0" assertions="1"/></testsuites>',
+				'phpstan_json'      => '',
+			]
+		);
+		$this->use_provider( new FakeProvider( $progress ) );
+		$build = $this->insert_build( Build::STATUS_BUILDING );
+
+		// Block the staging write by occupying the target "src" path with a
+		// file, so the directory it must become cannot be created.
+		$staging = Paths::build_staging_dir( $build->id );
+		$this->assertNotSame( '', $staging );
+		file_put_contents( $staging . '/src', 'not a directory' );
+
+		Poller::run();
+
+		$reloaded = $this->repo->find( $build->id );
+		$this->assertNotNull( $reloaded );
+		$this->assertSame( Build::STATUS_FAILED, $reloaded->status );
+		$this->assertStringContainsString( 'staging', $reloaded->error );
+		$this->assertFalse( $reloaded->has_artifact() );
+	}
+
+	/**
 	 * A failed poll result fails the build.
 	 */
 	public function test_failed_progress_fails_the_build(): void {
@@ -175,6 +214,59 @@ final class PollerTest extends IntegrationTestCase {
 		$this->assertNotNull( $reloaded );
 		$this->assertSame( Build::STATUS_FAILED, $reloaded->status );
 		$this->assertStringContainsString( 'sandbox session', $reloaded->error );
+	}
+
+	/**
+	 * A poll run is skipped entirely while another run holds the lock.
+	 *
+	 * Without the lock, an overlapping recurring tick and caw_poll_now nudge
+	 * could both start the same pending build — duplicate sandbox sessions and
+	 * double billing.
+	 */
+	public function test_run_is_skipped_when_lock_is_held(): void {
+		if ( wp_using_ext_object_cache() ) {
+			$this->markTestSkipped( 'The transient-based lock path requires no persistent object cache.' );
+		}
+
+		$this->use_provider( new FakeProvider() );
+		$build = $this->insert_build( Build::STATUS_PENDING );
+		delete_option( 'caw_last_poll' );
+
+		// Simulate another poll run already holding the lock.
+		set_transient( 'caw_poll_lock', time(), 300 );
+
+		Poller::run();
+
+		$reloaded = $this->repo->find( $build->id );
+		$this->assertNotNull( $reloaded );
+		$this->assertSame(
+			Build::STATUS_PENDING,
+			$reloaded->status,
+			'A locked-out poll run must not advance any build.'
+		);
+		$this->assertSame(
+			0,
+			(int) get_option( 'caw_last_poll', 0 ),
+			'A locked-out run did not poll, so it must not record a poll timestamp.'
+		);
+
+		delete_transient( 'caw_poll_lock' );
+	}
+
+	/**
+	 * A completed poll run records its timestamp for the diagnostics screen.
+	 */
+	public function test_run_records_last_poll_timestamp(): void {
+		$this->use_provider( new FakeProvider() );
+		delete_option( 'caw_last_poll' );
+
+		Poller::run();
+
+		$this->assertGreaterThan(
+			0,
+			(int) get_option( 'caw_last_poll', 0 ),
+			'Poller::run() must record when it last ran.'
+		);
 	}
 
 	/**

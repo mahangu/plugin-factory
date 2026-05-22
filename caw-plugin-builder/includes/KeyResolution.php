@@ -20,6 +20,7 @@ final class KeyResolution {
 
 	public const SOURCE_ENV      = 'env';
 	public const SOURCE_CONSTANT = 'constant';
+	public const SOURCE_PLUGIN   = 'plugin';
 	public const SOURCE_DATABASE = 'database';
 	public const SOURCE_LEGACY   = 'legacy';
 	public const SOURCE_NONE     = 'none';
@@ -93,10 +94,12 @@ final class KeyResolution {
 				return __( 'Environment variable (ANTHROPIC_API_KEY)', 'caw-plugin-builder' );
 			case self::SOURCE_CONSTANT:
 				return __( 'PHP constant (ANTHROPIC_API_KEY)', 'caw-plugin-builder' );
+			case self::SOURCE_PLUGIN:
+				return __( 'Plugin setting', 'caw-plugin-builder' );
 			case self::SOURCE_DATABASE:
 				return __( 'WordPress Connectors API', 'caw-plugin-builder' );
 			case self::SOURCE_LEGACY:
-				return __( 'Plugin setting (legacy)', 'caw-plugin-builder' );
+				return __( 'Plugin setting (migrated from a pre-0.1 install)', 'caw-plugin-builder' );
 			default:
 				return __( 'Not configured', 'caw-plugin-builder' );
 		}

@@ -12,14 +12,20 @@ namespace CAW\PluginBuilder;
 /**
  * The single source of truth for "where does the Anthropic API key come from".
  *
- * Precedence mirrors WordPress core's own Connectors API logic
- * (see _wp_connectors_get_api_key_source() in wp-includes/connectors.php):
+ * Precedence:
  *
  *   1. Environment variable ANTHROPIC_API_KEY
  *   2. PHP constant ANTHROPIC_API_KEY
- *   3. Connectors API database setting connectors_ai_anthropic_api_key
+ *   3. The plugin's own key field (option caw_api_key), with the pre-0.1
+ *      option caw_legacy_api_key consulted as a migration fallback
+ *   4. Connectors API database setting connectors_ai_anthropic_api_key
  *      (only consulted when the 'anthropic' connector is registered)
- *   4. Legacy plugin option (pre-7.0 hosts without the Connectors API)
+ *
+ * The plugin's own field deliberately outranks the Connectors API setting:
+ * CAW calls the Managed Agents API directly and does not use the WP AI Client,
+ * and on stock WordPress 7.0 the Connectors screen cannot reliably accept an
+ * Anthropic key unless the separate ai-provider-for-anthropic plugin is active.
+ * Reading the Connectors setting as a lower-priority fallback is still useful.
  *
  * WordPress 7.0 ships NO public accessor that returns a *resolved* connector
  * key — the only core helper, _wp_connectors_get_api_key_source(), is private
@@ -33,7 +39,13 @@ namespace CAW\PluginBuilder;
 final class KeyResolver {
 
 	/**
-	 * Option name used on pre-7.0 hosts that lack the Connectors API.
+	 * The plugin's own first-class API key option.
+	 */
+	public const OPTION = 'caw_api_key';
+
+	/**
+	 * Pre-0.1 plugin key option, still read as a migration fallback so an
+	 * existing install does not lose its key when upgrading.
 	 */
 	public const LEGACY_OPTION = 'caw_legacy_api_key';
 
@@ -45,7 +57,7 @@ final class KeyResolver {
 	private const DEFAULT_DB_SETTING  = 'connectors_ai_anthropic_api_key';
 
 	/**
-	 * Resolve the Anthropic API key following core's documented precedence.
+	 * Resolve the Anthropic API key following the documented precedence.
 	 *
 	 * @return KeyResolution The resolution (key + source), never null.
 	 */
@@ -66,19 +78,21 @@ final class KeyResolver {
 			}
 		}
 
-		// 3. Connectors API database setting — only when the connector exists.
+		// 3. The plugin's own key field, with the pre-0.1 option as a fallback.
+		$own = get_option( self::OPTION, '' );
+		if ( is_string( $own ) && '' !== trim( $own ) ) {
+			return KeyResolution::found( trim( $own ), KeyResolution::SOURCE_PLUGIN );
+		}
+		$legacy = get_option( self::LEGACY_OPTION, '' );
+		if ( is_string( $legacy ) && '' !== trim( $legacy ) ) {
+			return KeyResolution::found( trim( $legacy ), KeyResolution::SOURCE_LEGACY );
+		}
+
+		// 4. Connectors API database setting — only when the connector exists.
 		if ( Capabilities::anthropic_connector_registered() ) {
 			$value = get_option( $names['db_setting'], '' );
 			if ( is_string( $value ) && '' !== trim( $value ) ) {
 				return KeyResolution::found( trim( $value ), KeyResolution::SOURCE_DATABASE );
-			}
-		}
-
-		// 4. Legacy plugin option — pre-7.0 fallback only.
-		if ( ! Capabilities::has_connectors_api() ) {
-			$value = get_option( self::LEGACY_OPTION, '' );
-			if ( is_string( $value ) && '' !== trim( $value ) ) {
-				return KeyResolution::found( trim( $value ), KeyResolution::SOURCE_LEGACY );
 			}
 		}
 
@@ -88,15 +102,12 @@ final class KeyResolver {
 	/**
 	 * Deep link an admin should follow to supply a key.
 	 *
-	 * On 7.0+ this points at Settings -> Connectors; on older hosts it points
-	 * at the plugin's own settings screen where the legacy field lives.
+	 * Always the plugin's own settings screen: that field is the key path CAW
+	 * controls and the one that outranks the Connectors setting.
 	 *
 	 * @return string Admin URL.
 	 */
 	public function settings_link(): string {
-		if ( Capabilities::has_connectors_api() ) {
-			return admin_url( 'options-general.php?page=connectors' );
-		}
 		return admin_url( 'admin.php?page=caw-plugin-builder-settings' );
 	}
 
