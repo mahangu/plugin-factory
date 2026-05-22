@@ -1,0 +1,138 @@
+/* CAW Plugin Builder admin styles. */
+
+.caw-wrap .caw-tagline {
+	max-width: 50em;
+	font-size: 14px;
+	color: #50575e;
+}
+
+.caw-card {
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+	padding: 12px 20px 20px;
+	margin: 16px 0;
+	max-width: 70em;
+}
+
+.caw-card h2 {
+	margin-top: 12px;
+}
+
+.caw-muted {
+	color: #646970;
+	font-size: 12px;
+}
+
+.caw-error {
+	color: #b32d2e;
+}
+
+.caw-prompt,
+blockquote.caw-prompt {
+	border-left: 4px solid #c3c4c7;
+	margin: 8px 0;
+	padding: 8px 12px;
+	background: #f6f7f7;
+}
+
+.caw-list {
+	list-style: disc;
+	margin-left: 2em;
+}
+
+.caw-code {
+	background: #1d2327;
+	color: #f0f0f1;
+	padding: 12px;
+	overflow: auto;
+	max-height: 28em;
+	font-size: 12px;
+	border-radius: 4px;
+}
+
+.caw-file {
+	margin: 6px 0;
+}
+
+.caw-file summary {
+	cursor: pointer;
+	padding: 4px 0;
+}
+
+.caw-verdict {
+	display: inline-block;
+	font-weight: 700;
+	padding: 4px 10px;
+	border-radius: 3px;
+}
+
+.caw-verdict.caw-pass {
+	background: #edfaef;
+	color: #007017;
+	border: 1px solid #68de7c;
+}
+
+.caw-verdict.caw-fail {
+	background: #fcf0f1;
+	color: #b32d2e;
+	border: 1px solid #f0a3a5;
+}
+
+.caw-gate {
+	border-left: 4px solid #c3c4c7;
+	padding: 2px 14px;
+	margin: 12px 0;
+	background: #f6f7f7;
+}
+
+.caw-gate.caw-pass {
+	border-left-color: #00a32a;
+}
+
+.caw-gate.caw-fail {
+	border-left-color: #d63638;
+}
+
+.caw-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 12px;
+	font-weight: 600;
+	background: #f0f0f1;
+	color: #1d2327;
+}
+
+.caw-badge-pending {
+	background: #f0f0f1;
+	color: #50575e;
+}
+
+.caw-badge-building {
+	background: #fcf9e8;
+	color: #8a6d00;
+}
+
+.caw-badge-completed {
+	background: #edfaef;
+	color: #007017;
+}
+
+.caw-badge-failed {
+	background: #fcf0f1;
+	color: #b32d2e;
+}
+
+.caw-badge-cancelled {
+	background: #f0f0f1;
+	color: #646970;
+}
+
+table.caw-builds {
+	max-width: 70em;
+}
+
+table.caw-builds td {
+	vertical-align: middle;
+}

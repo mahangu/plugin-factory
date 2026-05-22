@@ -1,5 +1,0 @@
-{
-    "require": {
-        "anthropic-ai/sdk": "^0.24.0"
-    }
-}

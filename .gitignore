@@ -1,10 +1,11 @@
 /vendor/
+/caw-plugin-builder/vendor/
 /wp-test/
 /.wp-test/
 *.log
 .DS_Store
-/tmp/
 /build/
 composer.phar
 .phpunit.result.cache
 .phpunit.cache/
+.phpstan.cache/
