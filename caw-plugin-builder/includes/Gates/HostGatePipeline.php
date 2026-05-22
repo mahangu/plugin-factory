@@ -308,6 +308,13 @@ final class HostGatePipeline {
 		if ( [] === $candidates ) {
 			return '';
 		}
+
+		// If the conventional "<slug>.php" carries a header, it is the main
+		// file; otherwise fall back to the first header file alphabetically.
+		$preferred = basename( $plugin_dir ) . '.php';
+		if ( in_array( $preferred, $candidates, true ) ) {
+			return $preferred;
+		}
 		sort( $candidates );
 		return $candidates[0];
 	}

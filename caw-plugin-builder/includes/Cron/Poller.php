@@ -39,9 +39,18 @@ use CAW\PluginBuilder\Support\Paths;
 final class Poller {
 
 	/**
-	 * Cron hook name.
+	 * Recurring cron hook.
 	 */
 	public const HOOK = 'caw_poll_builds';
+
+	/**
+	 * One-shot cron hook used to kick the poller right after a build is queued.
+	 *
+	 * This is deliberately a SEPARATE hook from the recurring one: a
+	 * wp_next_scheduled() guard cannot tell a one-shot event from the recurring
+	 * event when they share a hook, so a shared hook makes the nudge a no-op.
+	 */
+	public const HOOK_NOW = 'caw_poll_now';
 
 	/**
 	 * Custom cron schedule name.
@@ -78,6 +87,7 @@ final class Poller {
 	public static function register(): void {
 		add_filter( 'cron_schedules', [ self::class, 'add_schedule' ] );
 		add_action( self::HOOK, [ self::class, 'run' ] );
+		add_action( self::HOOK_NOW, [ self::class, 'run' ] );
 		self::schedule();
 	}
 
@@ -111,22 +121,25 @@ final class Poller {
 	}
 
 	/**
-	 * Remove the recurring poll event.
+	 * Remove every scheduled poll event, recurring and one-shot.
 	 */
 	public static function unschedule(): void {
-		$timestamp = wp_next_scheduled( self::HOOK );
-		while ( false !== $timestamp ) {
-			wp_unschedule_event( $timestamp, self::HOOK );
-			$timestamp = wp_next_scheduled( self::HOOK );
+		foreach ( [ self::HOOK, self::HOOK_NOW ] as $hook ) {
+			$timestamp = wp_next_scheduled( $hook );
+			while ( false !== $timestamp ) {
+				wp_unschedule_event( $timestamp, $hook );
+				$timestamp = wp_next_scheduled( $hook );
+			}
 		}
 	}
 
 	/**
-	 * Kick the poller as soon as possible (used right after a build is queued).
+	 * Kick the poller within a few seconds (used right after a build is queued)
+	 * so the first build step does not wait for the recurring interval.
 	 */
 	public static function nudge(): void {
-		if ( ! wp_next_scheduled( self::HOOK, [] ) ) {
-			wp_schedule_single_event( time() + 5, self::HOOK );
+		if ( ! wp_next_scheduled( self::HOOK_NOW ) ) {
+			wp_schedule_single_event( time() + 5, self::HOOK_NOW );
 		}
 	}
 
@@ -167,10 +180,10 @@ final class Poller {
 			$poller->advance( $build, $provider, $harvester, $artifacts, $repository );
 		}
 
-		// Keep a single-event fallback alive while work remains.
-		if ( $repository->has_active() ) {
-			self::nudge();
-		}
+		// Builds still in flight are picked up by the recurring poll. The
+		// interval is deliberately multi-minute: Managed Agents create
+		// endpoints are rate limited, and CI runs once per build, not in a
+		// tight loop.
 	}
 
 	/**

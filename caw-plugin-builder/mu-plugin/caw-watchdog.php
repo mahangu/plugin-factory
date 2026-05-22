@@ -23,6 +23,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Gate 2 boots a full WordPress inside a throwaway probe process purely to
+// test a candidate. The watchdog must stay completely inert there: a
+// disposable probe must never sweep sentinels, register a shutdown handler, or
+// otherwise mutate the live host's state. The probe harness defines this
+// constant before WordPress (and therefore this mu-plugin) loads.
+if ( defined( 'CAW_RUNTIME_PROBE' ) ) {
+	return;
+}
+
 if ( defined( 'CAW_WATCHDOG_LOADED' ) ) {
 	return;
 }

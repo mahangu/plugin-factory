@@ -68,6 +68,14 @@ final class Installer {
 	 * Ensure schema/assets are current; called on every boot to self-heal.
 	 */
 	public static function maybe_upgrade(): void {
+		// The watchdog is lockout-recovery infrastructure. If its file has gone
+		// missing — a manual deletion, a half-finished copy — restore it on the
+		// next request regardless of version. This is a single is_file() on the
+		// hot path, cheap enough to run unconditionally.
+		if ( ! self::watchdog_installed() ) {
+			self::install_watchdog();
+		}
+
 		$installed = get_option( self::OPTION_VERSION, '' );
 		if ( CAW_PB_VERSION === $installed ) {
 			return;

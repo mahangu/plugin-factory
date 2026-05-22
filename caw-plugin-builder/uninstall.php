@@ -4,7 +4,7 @@
  *
  * Runs only when the plugin is deleted from wp-admin. Removes everything the
  * plugin created: the builds table, its options, its working directories, and
- * — when nothing it installed is still active — the watchdog mu-plugin.
+ * the watchdog mu-plugin.
  *
  * @package CAW\PluginBuilder
  */
@@ -37,8 +37,9 @@ foreach ( $caw_options as $caw_option ) {
 	delete_option( $caw_option );
 }
 
-// Clear any scheduled poll events.
+// Clear any scheduled poll events (recurring and one-shot).
 wp_clear_scheduled_hook( 'caw_poll_builds' );
+wp_clear_scheduled_hook( 'caw_poll_now' );
 
 // Remove the working directories under uploads.
 $caw_uploads = wp_get_upload_dir();
@@ -62,7 +63,8 @@ if ( empty( $caw_uploads['error'] ) ) {
 	}
 }
 
-// Remove the watchdog mu-plugin only if nothing it installed is still active.
+// Remove the watchdog mu-plugin. Uninstall is a full removal of the tool, so
+// the watchdog — its own infrastructure — goes with it.
 if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
 	$caw_watchdog = WPMU_PLUGIN_DIR . '/caw-watchdog.php';
 	if ( is_file( $caw_watchdog ) ) {

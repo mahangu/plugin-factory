@@ -174,13 +174,4 @@ final class BuildRepository {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$wpdb->delete( self::table_name(), [ 'id' => $id ] );
 	}
-
-	/**
-	 * Whether any build is still active.
-	 *
-	 * @return bool True when at least one build needs polling.
-	 */
-	public function has_active(): bool {
-		return [] !== $this->find_active( 1 );
-	}
 }
