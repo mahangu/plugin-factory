@@ -97,6 +97,17 @@ abstract class IntegrationTestCase extends TestCase {
 	}
 
 	/**
+	 * Register an existing file for removal in tearDown.
+	 *
+	 * @param string $file Absolute file path.
+	 * @return string The same path, for chaining.
+	 */
+	protected function track_file( string $file ): string {
+		$this->scratch_files[] = $file;
+		return $file;
+	}
+
+	/**
 	 * Create and track a scratch file path (the file need not exist yet).
 	 *
 	 * @param string $suffix File suffix.

@@ -146,11 +146,22 @@ final class Poller {
 			return;
 		}
 
-		$service     = new AgentService( $resolution->key() );
-		$provider    = $service->provider();
-		$harvester   = new CiResultsHarvester();
-		$artifacts   = new ArtifactBuilder();
-		$poller      = new self();
+		$service = new AgentService( $resolution->key() );
+
+		/**
+		 * Filter the build provider. This is the clean seam for a future
+		 * provider: return any BuildProvider implementation to swap it in.
+		 *
+		 * @param BuildProvider $provider The default Anthropic Managed Agents provider.
+		 */
+		$provider = apply_filters( 'caw_build_provider', $service->provider() );
+		if ( ! $provider instanceof BuildProvider ) {
+			$provider = $service->provider();
+		}
+
+		$harvester = new CiResultsHarvester();
+		$artifacts = new ArtifactBuilder();
+		$poller    = new self();
 
 		foreach ( $builds as $build ) {
 			$poller->advance( $build, $provider, $harvester, $artifacts, $repository );
