@@ -102,14 +102,14 @@ final class HostGatePipeline {
 		// ---- COPY: lint-clean code may now enter wp-content/plugins -------
 		if ( ! $this->copy_tree( $candidate_root, $plugins_dir ) ) {
 			Paths::rmtree( $scratch );
-			Paths::rmtree( $plugins_dir );
+			$this->remove_plugin_dir( $plugins_dir );
 			return new GateReport( $results, false, __( 'The candidate could not be copied into the plugins directory.', 'caw-plugin-builder' ) );
 		}
 		Paths::rmtree( $scratch );
 
 		$main_file = $this->find_main_file( $plugins_dir );
 		if ( '' === $main_file ) {
-			Paths::rmtree( $plugins_dir );
+			$this->remove_plugin_dir( $plugins_dir );
 			return new GateReport( $results, false, __( 'The candidate has no recognisable main plugin file.', 'caw-plugin-builder' ) );
 		}
 		$basename = $slug . '/' . $main_file;
@@ -118,7 +118,7 @@ final class HostGatePipeline {
 		$gate2 = ( new RuntimeProbeGate() )->run( $plugins_dir . '/' . $main_file, $basename );
 		$results[] = $gate2;
 		if ( ! $gate2->passed() ) {
-			Paths::rmtree( $plugins_dir );
+			$this->remove_plugin_dir( $plugins_dir );
 			return new GateReport( $results, false, $gate2->summary() );
 		}
 
@@ -127,7 +127,7 @@ final class HostGatePipeline {
 		$results[] = $gate3;
 		if ( ! $gate3->passed() ) {
 			// ActivationGate already rolled back activation; remove the files.
-			Paths::rmtree( $plugins_dir );
+			$this->remove_plugin_dir( $plugins_dir );
 			Sentinel::untrack( $basename );
 			return new GateReport( $results, false, $gate3->summary() );
 		}
@@ -250,6 +250,42 @@ final class HostGatePipeline {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Remove a plugin folder this pipeline created under wp-content/plugins.
+	 *
+	 * Paths::rmtree() deliberately refuses to operate outside the plugin's own
+	 * uploads workspace, so it cannot perform this rollback. This method does
+	 * it instead, but only after proving the target is a direct child of
+	 * WP_PLUGIN_DIR — never a path the pipeline did not itself create.
+	 *
+	 * @param string $dir Absolute plugin directory.
+	 */
+	private function remove_plugin_dir( string $dir ): void {
+		if ( ! is_dir( $dir ) ) {
+			return;
+		}
+
+		$real         = (string) realpath( $dir );
+		$plugins_root = (string) realpath( WP_PLUGIN_DIR );
+		if ( '' === $real || '' === $plugins_root || dirname( $real ) !== $plugins_root ) {
+			Logger::warn( 'Refused to remove a directory outside wp-content/plugins', [ 'path' => $dir ] );
+			return;
+		}
+
+		$items = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator( $real, \FilesystemIterator::SKIP_DOTS ),
+			\RecursiveIteratorIterator::CHILD_FIRST
+		);
+		foreach ( $items as $item ) {
+			if ( $item->isDir() ) {
+				@rmdir( $item->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilentErrors
+			} else {
+				@unlink( $item->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilentErrors
+			}
+		}
+		@rmdir( $real ); // phpcs:ignore WordPress.PHP.NoSilentErrors
 	}
 
 	/**

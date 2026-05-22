@@ -44,6 +44,11 @@ final class ActivationGate {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		}
 
+		// validate_plugin() consults the cached plugin list. A plugin copied
+		// into wp-content/plugins moments ago will not be in a stale cache, so
+		// it is cleared here or WordPress would refuse a perfectly valid plugin.
+		wp_clean_plugins_cache( false );
+
 		// Track the plugin and arm the sentinel BEFORE activation begins, so the
 		// watchdog can recover even if the very next line crashes the request.
 		Sentinel::track( $plugin_basename );
