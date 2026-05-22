@@ -86,15 +86,6 @@ final class KeyResolver {
 	}
 
 	/**
-	 * Whether a key resolves successfully right now.
-	 *
-	 * @return bool True when a key is available.
-	 */
-	public function has_key(): bool {
-		return $this->resolve()->is_resolved();
-	}
-
-	/**
 	 * Deep link an admin should follow to supply a key.
 	 *
 	 * On 7.0+ this points at Settings -> Connectors; on older hosts it points

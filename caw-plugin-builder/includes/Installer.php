@@ -138,20 +138,6 @@ final class Installer {
 	}
 
 	/**
-	 * Remove the watchdog mu-plugin (used by uninstall only).
-	 */
-	public static function remove_watchdog(): void {
-		if ( ! defined( 'WPMU_PLUGIN_DIR' ) ) {
-			return;
-		}
-		$target = WPMU_PLUGIN_DIR . '/caw-watchdog.php';
-		if ( is_file( $target ) ) {
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink,WordPress.PHP.NoSilentErrors
-			@unlink( $target );
-		}
-	}
-
-	/**
 	 * Whether the watchdog mu-plugin is currently installed.
 	 *
 	 * @return bool True when present.

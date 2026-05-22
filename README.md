@@ -30,11 +30,12 @@ the gates.
    A. BUILD + CI            B. ARTIFACT              C. DESTINATIONS
  ┌──────────────────┐    ┌──────────────────┐    ┌────────────────────────┐
  │ Anthropic        │    │ validated plugin │    │ Download zip           │
- │ Managed Agent    │ -> │ zip, with        │ -> │ View authored files    │
- │ authors + tests  │    │ VALIDATION.md +  │    │ Validation report      │
- │ in a sandbox     │    │ report bundled   │    │ Install on this site * │
- └──────────────────┘    └──────────────────┘    └────────────────────────┘
-        sandbox only            host disk          * opt-in, gated, can be
+ │ Managed Agent    │ -> │ zip, with        │ -> │ Install on this site * │
+ │ authors + tests  │    │ VALIDATION.md +  │    │                        │
+ │ in a sandbox     │    │ report bundled   │    │ (CI report + authored  │
+ └──────────────────┘    └──────────────────┘    │  files always shown)   │
+        sandbox only            host disk        └────────────────────────┘
+                                                   * opt-in, gated, can be
                                                      disabled by the host
 ```
 
@@ -45,10 +46,11 @@ the gates.
 - **B — Artifact.** A build that passes CI is packaged into a plugin zip with
   `VALIDATION.md` and `caw-validation.json` bundled **inside** it. This is the
   "completed" deliverable.
-- **C — Destinations.** Opt-in actions on a completed artifact: **Download**,
-  **View authored files**, **Validation report** (always available), and
-  **Install on this site** (the host gate gauntlet). *Install to another site*
-  and *push to Git* are intentionally future stubs only.
+- **C — Destinations.** The build review screen always shows the sandbox CI
+  report and the authored files. It offers two opt-in actions on a completed
+  artifact: **Download** the plugin zip, and **Install on this site** (the host
+  gate gauntlet). *Install to another site* and *push to Git* are intentionally
+  future stubs only.
 
 The stages have hard stops: an artifact only exists after CI is judged to pass;
 installation only happens on an explicit, separate confirmation.
@@ -178,12 +180,15 @@ hosted-agent equivalent exists today.
 
 ```sh
 cd caw-plugin-builder
-composer install --no-dev   # bundle runtime dependencies
+composer install --no-dev   # runtime dependencies only (for a release build)
 ```
 
 Then copy `caw-plugin-builder/` into `wp-content/plugins/` and activate it.
 Activation creates the builds table, provisions the staging/artifact
 directories, installs the watchdog mu-plugin, and schedules the poller.
+
+To run the test suite, install the dev dependencies instead — a plain
+`composer install` (see [Development](#development) below).
 
 ---
 

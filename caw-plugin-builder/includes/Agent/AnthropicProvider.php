@@ -161,14 +161,21 @@ final class AnthropicProvider implements BuildProvider {
 			}
 
 			if ( Status::TERMINATED->value === $status ) {
+				// A terminated session is final: every event has long since
+				// propagated, so a missing submission here is a real failure.
 				return BuildProgress::failed(
 					__( 'The sandbox session ended without submitting a build. Check the agent transcript.', 'caw-plugin-builder' )
 				);
 			}
 
 			if ( Status::IDLE->value === $status ) {
-				return BuildProgress::failed(
-					__( 'The agent finished its turn without calling the submit tool. The build did not complete.', 'caw-plugin-builder' )
+				// An idle session has only paused its turn. The agent goes idle
+				// the instant it calls a tool, so a just-submitted build can be
+				// idle a moment before its submission event is listable. Keep
+				// polling rather than failing: a genuine no-submission build is
+				// still bounded by the poller's overall attempt cap.
+				return BuildProgress::running(
+					__( 'The agent turn is idle; waiting for the build submission to surface.', 'caw-plugin-builder' )
 				);
 			}
 
@@ -307,7 +314,16 @@ final class AnthropicProvider implements BuildProvider {
 		$cache       = is_array( $cache ) ? $cache : [];
 
 		if ( isset( $cache[ $fingerprint ] ) && '' !== $cache[ $fingerprint ] ) {
-			return (string) $cache[ $fingerprint ];
+			$agent_id = (string) $cache[ $fingerprint ];
+			// Confirm the cached agent still exists before reusing it; a
+			// server-side deletion would otherwise fail every build for this
+			// toolchain. Mirrors EnvironmentManager's environment revalidation.
+			try {
+				$this->client->beta->agents->retrieve( $agent_id, betas: [ self::BETA ] );
+				return $agent_id;
+			} catch ( APIException $e ) {
+				Logger::warn( 'Cached build agent is gone; recreating', [ 'fingerprint' => $fingerprint ] );
+			}
 		}
 
 		$agent = $this->client->beta->agents->create(
