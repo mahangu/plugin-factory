@@ -58,6 +58,22 @@ final class Poller {
 	public const SCHEDULE = 'caw_poll_interval';
 
 	/**
+	 * Option holding the Unix timestamp of the last completed poll run.
+	 */
+	public const LAST_POLL_OPTION = 'caw_last_poll';
+
+	/**
+	 * Cache/transient key for the run lock.
+	 */
+	private const LOCK_KEY = 'caw_poll_lock';
+
+	/**
+	 * Lifetime of the run lock, in seconds. A crashed poll self-heals once it
+	 * expires; comfortably longer than a normal run.
+	 */
+	private const LOCK_TTL = 300;
+
+	/**
 	 * Poll interval in seconds.
 	 */
 	private const INTERVAL = 120;
@@ -145,8 +161,61 @@ final class Poller {
 
 	/**
 	 * Cron callback: advance every active build by one step.
+	 *
+	 * Guarded by a short-lived lock. WP-Cron can fire the recurring tick and
+	 * the caw_poll_now nudge in overlapping requests; without the lock both
+	 * could call provider->start() on the same pending build, creating
+	 * duplicate sandbox sessions and double Anthropic billing.
 	 */
 	public static function run(): void {
+		if ( ! self::acquire_lock() ) {
+			Logger::info( 'Poll skipped: another poll run holds the lock' );
+			return;
+		}
+
+		try {
+			self::process_active_builds();
+		} finally {
+			update_option( self::LAST_POLL_OPTION, time(), false );
+			self::release_lock();
+		}
+	}
+
+	/**
+	 * Acquire the run lock.
+	 *
+	 * Uses an atomic wp_cache_add() when a persistent object cache is present;
+	 * otherwise a transient, whose TTL means a crashed run cannot wedge the
+	 * poller permanently.
+	 *
+	 * @return bool True when the lock was acquired by this call.
+	 */
+	private static function acquire_lock(): bool {
+		if ( wp_using_ext_object_cache() ) {
+			return wp_cache_add( self::LOCK_KEY, time(), 'caw-plugin-builder', self::LOCK_TTL );
+		}
+		if ( false !== get_transient( self::LOCK_KEY ) ) {
+			return false;
+		}
+		set_transient( self::LOCK_KEY, time(), self::LOCK_TTL );
+		return true;
+	}
+
+	/**
+	 * Release the run lock.
+	 */
+	private static function release_lock(): void {
+		if ( wp_using_ext_object_cache() ) {
+			wp_cache_delete( self::LOCK_KEY, 'caw-plugin-builder' );
+			return;
+		}
+		delete_transient( self::LOCK_KEY );
+	}
+
+	/**
+	 * Advance every active build by one step. Always called under the lock.
+	 */
+	private static function process_active_builds(): void {
 		$repository = new BuildRepository();
 		$builds     = $repository->find_active( self::BATCH );
 		if ( [] === $builds ) {

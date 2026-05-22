@@ -44,6 +44,7 @@ final class PollerTest extends IntegrationTestCase {
 		$this->repo      = new BuildRepository();
 		$this->saved_env = getenv( 'ANTHROPIC_API_KEY' );
 		putenv( 'ANTHROPIC_API_KEY=sk-ant-fake-for-poller' );
+		delete_transient( 'caw_poll_lock' );
 	}
 
 	/**
@@ -70,6 +71,9 @@ final class PollerTest extends IntegrationTestCase {
 			$this->repo->delete( $id );
 		}
 		$this->build_ids = [];
+
+		delete_transient( 'caw_poll_lock' );
+		delete_option( 'caw_last_poll' );
 
 		parent::tearDown();
 	}
@@ -175,6 +179,53 @@ final class PollerTest extends IntegrationTestCase {
 		$this->assertNotNull( $reloaded );
 		$this->assertSame( Build::STATUS_FAILED, $reloaded->status );
 		$this->assertStringContainsString( 'sandbox session', $reloaded->error );
+	}
+
+	/**
+	 * A poll run is skipped entirely while another run holds the lock.
+	 *
+	 * Without the lock, an overlapping recurring tick and caw_poll_now nudge
+	 * could both start the same pending build — duplicate sandbox sessions and
+	 * double billing.
+	 */
+	public function test_run_is_skipped_when_lock_is_held(): void {
+		if ( wp_using_ext_object_cache() ) {
+			$this->markTestSkipped( 'The transient-based lock path requires no persistent object cache.' );
+		}
+
+		$this->use_provider( new FakeProvider() );
+		$build = $this->insert_build( Build::STATUS_PENDING );
+
+		// Simulate another poll run already holding the lock.
+		set_transient( 'caw_poll_lock', time(), 300 );
+
+		Poller::run();
+
+		$reloaded = $this->repo->find( $build->id );
+		$this->assertNotNull( $reloaded );
+		$this->assertSame(
+			Build::STATUS_PENDING,
+			$reloaded->status,
+			'A locked-out poll run must not advance any build.'
+		);
+
+		delete_transient( 'caw_poll_lock' );
+	}
+
+	/**
+	 * A completed poll run records its timestamp for the diagnostics screen.
+	 */
+	public function test_run_records_last_poll_timestamp(): void {
+		$this->use_provider( new FakeProvider() );
+		delete_option( 'caw_last_poll' );
+
+		Poller::run();
+
+		$this->assertGreaterThan(
+			0,
+			(int) get_option( 'caw_last_poll', 0 ),
+			'Poller::run() must record when it last ran.'
+		);
 	}
 
 	/**

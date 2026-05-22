@@ -55,6 +55,7 @@ final class AdminPage {
 		add_action( 'admin_post_caw_install_build', [ $this, 'handle_install' ] );
 		add_action( 'admin_post_caw_download_build', [ $this, 'handle_download' ] );
 		add_action( 'admin_post_caw_delete_build', [ $this, 'handle_delete' ] );
+		add_action( 'admin_post_caw_advance_builds', [ $this, 'handle_advance' ] );
 	}
 
 	/**
@@ -193,6 +194,7 @@ final class AdminPage {
 		$this->notices();
 		$this->key_banner();
 		$this->capability_banner();
+		$this->cron_banner();
 
 		$resolution = ( new KeyResolver() )->resolve();
 
@@ -218,7 +220,18 @@ final class AdminPage {
 		echo '</div>';
 
 		$builds = $this->builds->find_recent( 50 );
+
+		echo '<div class="caw-builds-header">';
 		echo '<h2>' . esc_html__( 'Builds', 'caw-plugin-builder' ) . '</h2>';
+		if ( [] !== $builds ) {
+			// Advance the queue without waiting for the next WP-Cron tick.
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			wp_nonce_field( 'caw_advance_builds' );
+			echo '<input type="hidden" name="action" value="caw_advance_builds" />';
+			submit_button( __( 'Advance builds now', 'caw-plugin-builder' ), 'secondary', 'submit', false );
+			echo '</form>';
+		}
+		echo '</div>';
 
 		if ( [] === $builds ) {
 			echo '<p>' . esc_html__( 'No builds yet.', 'caw-plugin-builder' ) . '</p>';
@@ -231,6 +244,7 @@ final class AdminPage {
 		echo '<th>' . esc_html__( 'Slug', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Request', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Status', 'caw-plugin-builder' ) . '</th>';
+		echo '<th>' . esc_html__( 'Elapsed', 'caw-plugin-builder' ) . '</th>';
 		echo '<th>' . esc_html__( 'Created', 'caw-plugin-builder' ) . '</th>';
 		echo '</tr></thead><tbody>';
 
@@ -241,6 +255,7 @@ final class AdminPage {
 			echo '<td><code>' . esc_html( $build->slug ) . '</code></td>';
 			echo '<td>' . esc_html( $this->excerpt( $build->prompt, 70 ) ) . '</td>';
 			echo '<td>' . $this->status_badge( $build ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo '<td>' . esc_html( $this->elapsed_label( $build ) ) . '</td>';
 			echo '<td>' . esc_html( $build->created_at ) . '</td>';
 			echo '</tr>';
 		}
@@ -267,6 +282,13 @@ final class AdminPage {
 		echo '<div class="caw-card">';
 		echo '<h2>' . esc_html__( 'Request', 'caw-plugin-builder' ) . '</h2>';
 		echo '<p><strong>' . esc_html__( 'Slug:', 'caw-plugin-builder' ) . '</strong> <code>' . esc_html( $build->slug ) . '</code></p>';
+		$elapsed = $this->elapsed_label( $build );
+		if ( '' !== $elapsed ) {
+			$time_label = $build->is_active()
+				? __( 'Running for:', 'caw-plugin-builder' )
+				: __( 'Build time:', 'caw-plugin-builder' );
+			echo '<p><strong>' . esc_html( $time_label ) . '</strong> ' . esc_html( $elapsed ) . '</p>';
+		}
 		echo '<blockquote class="caw-prompt">' . nl2br( esc_html( $build->prompt ) ) . '</blockquote>';
 		if ( '' !== $build->error ) {
 			echo '<p class="caw-error"><strong>' . esc_html__( 'Error:', 'caw-plugin-builder' ) . '</strong> ' . esc_html( $build->error ) . '</p>';
@@ -592,6 +614,8 @@ final class AdminPage {
 			__( 'exec() available', 'caw-plugin-builder' )       => $summary['can_exec'] ? __( 'yes', 'caw-plugin-builder' ) : __( 'no', 'caw-plugin-builder' ),
 			__( 'Local install', 'caw-plugin-builder' )          => $summary['can_install_locally'] ? __( 'enabled', 'caw-plugin-builder' ) : __( 'disabled', 'caw-plugin-builder' ),
 			__( 'Watchdog mu-plugin', 'caw-plugin-builder' )     => Installer::watchdog_installed() ? __( 'installed', 'caw-plugin-builder' ) : __( 'missing', 'caw-plugin-builder' ),
+			__( 'WP-Cron', 'caw-plugin-builder' )                => ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) ? __( 'disabled (DISABLE_WP_CRON)', 'caw-plugin-builder' ) : __( 'enabled', 'caw-plugin-builder' ),
+			__( 'Last build poll', 'caw-plugin-builder' )        => $this->last_poll_label(),
 		];
 		foreach ( $rows as $label => $value ) {
 			echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td>' . esc_html( $value ) . '</td></tr>';
@@ -719,6 +743,25 @@ final class AdminPage {
 	}
 
 	/**
+	 * Handle the "Advance builds now" action.
+	 *
+	 * Runs a poll immediately instead of waiting for the next WP-Cron tick.
+	 * Poller::run() is itself lock-guarded, so this is safe to invoke even
+	 * while a scheduled poll is in flight.
+	 */
+	public function handle_advance(): void {
+		$this->guard( 'caw_advance_builds' );
+
+		Poller::run();
+
+		$this->redirect_with_notice(
+			$this->menu_url(),
+			'success',
+			__( 'The build queue was advanced.', 'caw-plugin-builder' )
+		);
+	}
+
+	/**
 	 * Verify nonce + capability for a POST action, or die.
 	 *
 	 * @param string $nonce_action Nonce action string.
@@ -769,6 +812,58 @@ final class AdminPage {
 			echo '<li>' . esc_html( $blocker ) . '</li>';
 		}
 		echo '</ul></div>';
+	}
+
+	/**
+	 * Render a warning when WP-Cron is disabled, since builds rely on it.
+	 */
+	private function cron_banner(): void {
+		if ( ! ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) ) {
+			return;
+		}
+		echo '<div class="notice notice-warning inline"><p>';
+		echo esc_html__( 'WP-Cron is disabled on this site (DISABLE_WP_CRON is set), so builds will not progress on their own. Use "Advance builds now" below, or make sure a real system cron runs wp-cron.php.', 'caw-plugin-builder' );
+		echo '</p></div>';
+	}
+
+	/**
+	 * Human-readable elapsed time for a build.
+	 *
+	 * For an active build this is the time since it was created; for a finished
+	 * build it is the time from creation to its last update.
+	 *
+	 * @param Build $build Build.
+	 * @return string Elapsed label, or '' when timestamps are unavailable.
+	 */
+	private function elapsed_label( Build $build ): string {
+		$start = strtotime( $build->created_at . ' UTC' );
+		if ( false === $start ) {
+			return '';
+		}
+		if ( $build->is_active() ) {
+			$end = time();
+		} else {
+			$updated = strtotime( $build->updated_at . ' UTC' );
+			$end     = false !== $updated ? $updated : $start;
+		}
+		return human_time_diff( $start, max( $start, $end ) );
+	}
+
+	/**
+	 * Human-readable description of when the poller last ran.
+	 *
+	 * @return string Label.
+	 */
+	private function last_poll_label(): string {
+		$last = (int) get_option( Poller::LAST_POLL_OPTION, 0 );
+		if ( $last <= 0 ) {
+			return __( 'never', 'caw-plugin-builder' );
+		}
+		return sprintf(
+			/* translators: %s: human-readable time difference, e.g. "5 mins" */
+			__( '%s ago', 'caw-plugin-builder' ),
+			human_time_diff( $last, time() )
+		);
 	}
 
 	/**

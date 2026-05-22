@@ -136,3 +136,26 @@ table.caw-builds {
 table.caw-builds td {
 	vertical-align: middle;
 }
+
+.caw-builds-header {
+	display: flex;
+	align-items: baseline;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.caw-builds-header form {
+	margin: 0;
+}
+
+.caw-log {
+	background: #1d2327;
+	color: #f0f0f1;
+	padding: 12px;
+	overflow: auto;
+	max-height: 24em;
+	font-size: 12px;
+	border-radius: 4px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}

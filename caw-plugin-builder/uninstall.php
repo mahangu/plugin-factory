@@ -33,6 +33,7 @@ $caw_options = [
 	'caw_agents',
 	'caw_api_key',
 	'caw_legacy_api_key',
+	'caw_last_poll',
 ];
 foreach ( $caw_options as $caw_option ) {
 	delete_option( $caw_option );
