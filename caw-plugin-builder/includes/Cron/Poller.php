@@ -184,9 +184,12 @@ final class Poller {
 	/**
 	 * Acquire the run lock.
 	 *
-	 * Uses an atomic wp_cache_add() when a persistent object cache is present;
-	 * otherwise a transient, whose TTL means a crashed run cannot wedge the
-	 * poller permanently.
+	 * With a persistent object cache this is a genuinely atomic wp_cache_add().
+	 * Without one it falls back to a transient: its read-then-write is not
+	 * atomic, so a sub-millisecond overlap is still theoretically possible —
+	 * but it collapses the window from "always" to "vanishingly rare", and the
+	 * 300s TTL means a crashed run cannot wedge the poller permanently. A
+	 * fully atomic DB lock for that case is noted as a follow-up.
 	 *
 	 * @return bool True when the lock was acquired by this call.
 	 */

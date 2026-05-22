@@ -231,7 +231,21 @@ final class AnthropicProvider implements BuildProvider {
 			betas: [ self::BETA ],
 		);
 
-		foreach ( $page->getItems() as $event ) {
+		return self::select_submission( $page->getItems() );
+	}
+
+	/**
+	 * Pick the caw_submit_build custom tool call out of a list of events.
+	 *
+	 * Extracted as a pure static helper so the client-side filtering — the
+	 * part that must keep working now that the server-side types filter is
+	 * gone — can be unit-tested without a live API call.
+	 *
+	 * @param iterable<mixed> $events Session events, newest first.
+	 * @return ManagedAgentsAgentCustomToolUseEvent|null The submission event, or null.
+	 */
+	public static function select_submission( iterable $events ): ?ManagedAgentsAgentCustomToolUseEvent {
+		foreach ( $events as $event ) {
 			if ( $event instanceof ManagedAgentsAgentCustomToolUseEvent && self::SUBMIT_TOOL === $event->name ) {
 				return $event;
 			}

@@ -230,6 +230,7 @@ final class PollerTest extends IntegrationTestCase {
 
 		$this->use_provider( new FakeProvider() );
 		$build = $this->insert_build( Build::STATUS_PENDING );
+		delete_option( 'caw_last_poll' );
 
 		// Simulate another poll run already holding the lock.
 		set_transient( 'caw_poll_lock', time(), 300 );
@@ -242,6 +243,11 @@ final class PollerTest extends IntegrationTestCase {
 			Build::STATUS_PENDING,
 			$reloaded->status,
 			'A locked-out poll run must not advance any build.'
+		);
+		$this->assertSame(
+			0,
+			(int) get_option( 'caw_last_poll', 0 ),
+			'A locked-out run did not poll, so it must not record a poll timestamp.'
 		);
 
 		delete_transient( 'caw_poll_lock' );

@@ -42,6 +42,9 @@ composer install \
 	--no-dev --optimize-autoloader --no-interaction --no-progress
 
 echo "==> Removing development-only files"
+# .distignore entries must be literal paths relative to the plugin root.
+# Anything with a traversal segment or an absolute path is rejected so a
+# careless (or hostile) entry cannot delete outside the staging tree.
 if [ -f "${STAGE}/.distignore" ]; then
 	while IFS= read -r pattern || [ -n "${pattern}" ]; do
 		pattern="${pattern%$'\r'}"
@@ -49,7 +52,13 @@ if [ -f "${STAGE}/.distignore" ]; then
 		case "${pattern}" in \#*) continue ;; esac
 		rel="${pattern#/}"
 		[ -z "${rel}" ] && continue
-		rm -rf "${STAGE:?}/${rel}"
+		case "${rel}" in
+			*..*|/*)
+				echo "    skipping unsafe .distignore entry: ${pattern}" >&2
+				continue
+				;;
+		esac
+		rm -rf -- "${STAGE:?}/${rel}"
 	done < "${STAGE}/.distignore"
 fi
 
