@@ -9,15 +9,14 @@ declare(strict_types=1);
 
 namespace CAW\PluginBuilder\Admin;
 
+use CAW\PluginBuilder\Agent\AgentService;
 use CAW\PluginBuilder\Build\Build;
 use CAW\PluginBuilder\Build\BuildRepository;
 use CAW\PluginBuilder\Capabilities;
 use CAW\PluginBuilder\Cron\Poller;
-use CAW\PluginBuilder\Gates\GateReport;
 use CAW\PluginBuilder\Gates\HostGatePipeline;
 use CAW\PluginBuilder\Installer;
 use CAW\PluginBuilder\KeyResolver;
-use CAW\PluginBuilder\Sentinel;
 use CAW\PluginBuilder\Support\Paths;
 
 /**
@@ -107,19 +106,51 @@ final class AdminPage {
 	}
 
 	/**
-	 * Register the legacy API key setting (used only on pre-7.0 hosts).
+	 * Register the plugin's Anthropic API key setting.
+	 *
+	 * The sanitize callback also runs a lightweight validation of a newly
+	 * entered key against the Managed Agents API.
 	 */
 	public function register_settings(): void {
 		register_setting(
 			'caw_plugin_builder_settings',
-			KeyResolver::LEGACY_OPTION,
+			KeyResolver::OPTION,
 			[
 				'type'              => 'string',
-				'sanitize_callback' => 'sanitize_text_field',
+				'sanitize_callback' => [ $this, 'sanitize_api_key' ],
 				'default'           => '',
 				'show_in_rest'      => false,
 			]
 		);
+	}
+
+	/**
+	 * Sanitise — and lightly validate — a submitted API key.
+	 *
+	 * A blank submission keeps the existing key (the field is never pre-filled
+	 * with the secret, so blank means "leave unchanged"). A new, non-empty key
+	 * is verified against the Managed Agents API, with the result surfaced as a
+	 * settings notice. Validation never blocks the save.
+	 *
+	 * @param mixed $value Raw submitted value.
+	 * @return string The value to store.
+	 */
+	public function sanitize_api_key( $value ): string {
+		$value = sanitize_text_field( (string) $value );
+		$old   = (string) get_option( KeyResolver::OPTION, '' );
+
+		if ( '' === $value ) {
+			// The field is intentionally never pre-filled with the secret, so a
+			// blank submission means "keep the current key", not "clear it".
+			return $old;
+		}
+
+		if ( $value !== $old ) {
+			$result = ( new AgentService( $value ) )->check_credentials();
+			add_settings_error( KeyResolver::OPTION, 'caw_key_check', $result['message'], $result['level'] );
+		}
+
+		return $value;
 	}
 
 	/**
@@ -497,26 +528,52 @@ final class AdminPage {
 		echo '<div class="wrap caw-wrap">';
 		echo '<h1>' . esc_html__( 'Plugin Builder Settings', 'caw-plugin-builder' ) . '</h1>';
 
+		settings_errors( KeyResolver::OPTION );
 		$this->key_banner();
-
-		if ( Capabilities::has_connectors_api() ) {
-			echo '<div class="caw-card"><p>';
-			echo esc_html__( 'This site has the WordPress 7.0 Connectors API. Manage the Anthropic API key under Settings → Connectors; this plugin reads it automatically.', 'caw-plugin-builder' );
-			echo '</p></div>';
-		} else {
-			echo '<div class="caw-card">';
-			echo '<h2>' . esc_html__( 'Anthropic API key (legacy)', 'caw-plugin-builder' ) . '</h2>';
-			echo '<p class="caw-muted">' . esc_html__( 'This site predates the Connectors API. The key is stored as a plugin option. An environment variable or PHP constant named ANTHROPIC_API_KEY always takes precedence.', 'caw-plugin-builder' ) . '</p>';
-			echo '<form method="post" action="' . esc_url( admin_url( 'options.php' ) ) . '">';
-			settings_fields( 'caw_plugin_builder_settings' );
-			$current = (string) get_option( KeyResolver::LEGACY_OPTION, '' );
-			echo '<p><input type="password" name="' . esc_attr( KeyResolver::LEGACY_OPTION ) . '" value="' . esc_attr( $current ) . '" class="regular-text" autocomplete="off" placeholder="sk-ant-..." /></p>';
-			submit_button( __( 'Save key', 'caw-plugin-builder' ) );
-			echo '</form>';
-			echo '</div>';
-		}
-
+		$this->render_key_card();
 		$this->render_diagnostics();
+		echo '</div>';
+	}
+
+	/**
+	 * Render the Anthropic API key card.
+	 *
+	 * The field is ALWAYS rendered. CAW calls the Managed Agents API directly
+	 * and does not use the WP AI Client, so it owns its own key rather than
+	 * deferring to Settings → Connectors (which on stock WordPress 7.0 cannot
+	 * accept an Anthropic key without the ai-provider-for-anthropic plugin).
+	 *
+	 * The stored secret is never echoed back into the field — a blank field
+	 * means "keep the current key".
+	 */
+	private function render_key_card(): void {
+		$has_key = '' !== (string) get_option( KeyResolver::OPTION, '' );
+
+		echo '<div class="caw-card">';
+		echo '<h2>' . esc_html__( 'Anthropic API key', 'caw-plugin-builder' ) . '</h2>';
+		echo '<p class="caw-muted">' . esc_html__( 'CAW Plugin Builder calls the Anthropic Managed Agents API directly. Enter a key from an account with Managed Agents beta access. An ANTHROPIC_API_KEY environment variable or PHP constant, if set, takes precedence over this field.', 'caw-plugin-builder' ) . '</p>';
+
+		echo '<form method="post" action="' . esc_url( admin_url( 'options.php' ) ) . '">';
+		settings_fields( 'caw_plugin_builder_settings' );
+		echo '<p><label for="caw-api-key"><strong>' . esc_html__( 'API key', 'caw-plugin-builder' ) . '</strong></label><br />';
+		echo '<input type="password" id="caw-api-key" name="' . esc_attr( KeyResolver::OPTION ) . '" value="" class="regular-text" autocomplete="off" placeholder="sk-ant-..." /></p>';
+		if ( $has_key ) {
+			echo '<p class="description">' . esc_html__( 'A key is currently saved. Leave this blank to keep it, or enter a new key to replace it.', 'caw-plugin-builder' ) . '</p>';
+		}
+		submit_button( __( 'Save key', 'caw-plugin-builder' ) );
+		echo '</form>';
+
+		// The Connectors API is offered as an optional alternative, not a
+		// redirect: CAW reads its setting only as a lower-priority fallback.
+		if ( Capabilities::anthropic_connector_registered() ) {
+			echo '<p class="caw-muted">';
+			printf(
+				/* translators: %s: link to Settings -> Connectors */
+				esc_html__( 'Optionally, the Anthropic key can instead be managed under %s. CAW reads that setting only as a lower-priority fallback — the field above always takes precedence.', 'caw-plugin-builder' ),
+				'<a href="' . esc_url( admin_url( 'options-general.php?page=connectors' ) ) . '">' . esc_html__( 'Settings → Connectors', 'caw-plugin-builder' ) . '</a>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			);
+			echo '</p>';
+		}
 		echo '</div>';
 	}
 

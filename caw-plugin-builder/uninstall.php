@@ -31,6 +31,7 @@ $caw_options = [
 	'caw_installed_version',
 	'caw_environments',
 	'caw_agents',
+	'caw_api_key',
 	'caw_legacy_api_key',
 ];
 foreach ( $caw_options as $caw_option ) {
