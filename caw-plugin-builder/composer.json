@@ -34,7 +34,7 @@
         "optimize-autoloader": true
     },
     "scripts": {
-        "test": "phpunit",
-        "stan": "phpstan analyse"
+        "test": "phpunit -c ../phpunit.xml.dist",
+        "stan": "phpstan analyse -c phpstan.neon.dist"
     }
 }
